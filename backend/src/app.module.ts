@@ -1,0 +1,15 @@
+import { DocumentController } from './document/document.controller';
+import { DocumentService } from './document/document.service';
+import { RagService } from './rag/rag.service';
+import { RagController } from './rag/rag.controller';
+import { Module } from '@nestjs/common';  
+import { DocumentModule } from './document/document.module';
+
+import { RagModule } from './rag/rag.module';
+import { PrismaModule } from './prisma/prisma.module';
+@Module({
+  imports: [DocumentModule,PrismaModule,RagModule],
+  controllers: [DocumentController, RagController],
+  providers: [DocumentService, RagService],
+})
+export class AppModule {}
