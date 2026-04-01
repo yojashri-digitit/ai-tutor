@@ -4,7 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { RagService } from '../rag/rag.service';
 import type { Express } from 'express';
 
-// 🔥 FINAL FIX (force correct function)
+// PDF parser fix
 const pdfParse = (...args: any[]) =>
   require('pdf-parse')(...args);
 
@@ -22,6 +22,9 @@ export class DocumentService {
 
     const text = await this.parseFile(file);
 
+    console.log("TEXT LENGTH:", text.length);
+    console.log("TEXT SAMPLE:", text.slice(0, 200));
+
     if (!text || text.trim().length < 20) {
       throw new Error('Provide valid text-based document');
     }
@@ -35,16 +38,27 @@ export class DocumentService {
 
     const chunks = this.chunkText(text);
 
+    console.log("TOTAL CHUNKS:", chunks.length);
+
     for (const chunk of chunks) {
+      console.log("Processing chunk:", chunk.slice(0, 50));
+
       const embedding = await this.ragService.getEmbedding(chunk);
 
-      await this.prisma.chunk.create({
-        data: {
-          content: chunk,
-          embedding,
-          documentId: document.id,
-        },
-      });
+      // ✅ SAFETY CHECK (VERY IMPORTANT)
+      if (!embedding || embedding.length === 0) {
+        console.warn("⚠️ Skipping empty embedding chunk");
+        continue;
+      }
+
+      await this.prisma.$executeRawUnsafe(`
+        INSERT INTO "Chunk" (content, embedding, "documentId")
+        VALUES (
+          '${chunk.replace(/'/g, "''")}',
+          '[${embedding.join(',')}]'::vector,
+          ${document.id}
+        );
+      `);
     }
 
     return {
@@ -53,24 +67,23 @@ export class DocumentService {
     };
   }
 
-  // 📄 FIXED PDF PARSER
+  // 📄 FILE PARSER
   async parseFile(file: Express.Multer.File): Promise<string> {
-
     if (file.mimetype === 'application/pdf') {
-      console.log("Parsing PDF (final fix)...");
+      console.log("Parsing PDF...");
 
       try {
         const data = await pdfParse(file.buffer);
 
         if (!data.text || data.text.trim().length < 20) {
-          throw new Error('Empty PDF');
+          throw new Error('Empty or scanned PDF');
         }
 
         return data.text;
 
       } catch (err) {
         console.error("PDF parsing failed:", err);
-        throw new Error('Failed to parse PDF. Ensure it is text-based.');
+        throw new Error('Failed to parse PDF. Use text-based PDF.');
       }
     }
 
@@ -85,14 +98,11 @@ export class DocumentService {
     throw new Error('Unsupported file type');
   }
 
+  // ✅ IMPROVED CHUNKING
   chunkText(text: string) {
-    const size = 500;
-    const chunks: string[] = [];
-
-    for (let i = 0; i < text.length; i += size) {
-      chunks.push(text.slice(i, i + size));
-    }
-
-    return chunks;
+    return text
+      .split(/\n\s*\n/)
+      .map(c => c.trim())
+      .filter(c => c.length > 30);
   }
 }
