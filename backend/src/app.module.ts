@@ -7,8 +7,9 @@ import { DocumentModule } from './document/document.module';
 
 import { RagModule } from './rag/rag.module';
 import { PrismaModule } from './prisma/prisma.module';
+import { TutorModule } from './tutor/tutor.module';
 @Module({
-  imports: [DocumentModule,PrismaModule,RagModule],
+  imports: [DocumentModule,PrismaModule,RagModule, TutorModule],
   controllers: [DocumentController, RagController],
   providers: [DocumentService, RagService],
 })
