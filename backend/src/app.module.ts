@@ -8,8 +8,15 @@ import { DocumentModule } from './document/document.module';
 import { RagModule } from './rag/rag.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { TutorModule } from './tutor/tutor.module';
+import { ConfigModule } from '@nestjs/config/dist/config.module';
 @Module({
-  imports: [DocumentModule,PrismaModule,RagModule, TutorModule],
+  imports: [
+    DocumentModule,PrismaModule,RagModule, TutorModule,
+    ConfigModule.forRoot({
+      isGlobal: true, // 🔥 important
+    }),
+    
+  ],
   controllers: [DocumentController, RagController],
   providers: [DocumentService, RagService],
 })
