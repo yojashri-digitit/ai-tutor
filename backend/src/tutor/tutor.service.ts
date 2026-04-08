@@ -6,242 +6,331 @@ import { PptService } from '../ppt/ppt.service';
 export class TutorService {
   constructor(private pptService: PptService) {}
 
-  // ================= REMOVE DUPLICATES =================
-  removeDuplicateSlides(data: any) {
-    const seen = new Set();
+  // ================= SLIDE PLAN =================
+  getSlidePlan(slides: number): string[] {
+    const base = [
+      "Introduction",
+      "Definition",
+      "Core Concept",
+      "Working Principle",
+      "Mathematical Insight",
+      "Algorithm",
+      "Example",
+      "Advantages",
+      "Limitations",
+      "Applications",
+      "Conclusion"
+    ];
 
-    data.slides = data.slides.filter((slide: any) => {
-      const key = slide.heading + (slide.points || []).join('');
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
+    if (slides <= base.length) return base.slice(0, slides);
 
-    return data;
+    const extended = [...base];
+    for (let i = base.length; i < slides; i++) {
+      extended.push(`Advanced Topic ${i - base.length + 1}`);
+    }
+
+    return extended;
   }
 
-  // ================= CLEAN FORMULA (FIX MathJax) =================
-  cleanFormula(formula: string) {
-    if (!formula) return "";
+  // ================= DIAGRAM LOGIC =================
+  fixDiagramCode(heading: string) {
+    const h = (heading || "").toLowerCase();
 
-    return formula
-      .replace(/[^\x00-\x7F]/g, '') // remove unicode
-      .replace(/\\/g, '\\\\'); // escape backslashes
+    if (h.includes("algorithm")) {
+      return `graph TD; Start --> Step1 --> Step2 --> End;`;
+    }
+
+    if (h.includes("work")) {
+      return `graph LR; Sender --> Channel --> Receiver;`;
+    }
+
+    if (h.includes("example")) {
+      return `graph TD; Input --> Process --> Output;`;
+    }
+
+    return "";
   }
 
-  // ================= ADVANCED EVALUATION =================
-  evaluateSlides(data: any) {
-    let score = 0;
-    let duplicates = 0;
-
-    const seen = new Set();
-
-    data.slides.forEach((slide: any) => {
-
-      if (slide.heading && slide.points?.length >= 3) score++;
-
-      if (slide.points?.some((p: string) => p.length > 30)) score++;
-
-      if (slide.formula || slide.code || slide.diagram) score++;
-
-      if (slide.imageHint && slide.imageHint.split(' ').length <= 3) score++;
-
-      const key = slide.heading + (slide.points || []).join('');
-      if (seen.has(key)) duplicates++;
-      seen.add(key);
-    });
-
-    console.log("📊 QUALITY SCORE:", score, "/", data.slides.length * 4);
-    console.log("🚫 DUPLICATES:", duplicates);
-
-    return { score, duplicates };
-  }
-
-  // ================= SAFE JSON PARSER =================
-safeJsonParse(content: string) {
-  try {
-    const match = content.match(/\{[\s\S]*\}/);
-    if (!match) throw new Error("No JSON found");
-
-    let cleanJson = match[0];
-
-    // Remove markdown
-    cleanJson = cleanJson.replace(/```json/g, '').replace(/```/g, '');
-
-    // Remove control characters
-    cleanJson = cleanJson.replace(/[\u0000-\u001F]+/g, '');
-
-    // Fix invalid escape sequences
-    cleanJson = cleanJson.replace(/\\(?!["\\/bfnrtu])/g, '\\\\');
-
-    // Fix missing commas
-    cleanJson = cleanJson.replace(/"\s*"/g, '","');
-
-    // Fix trailing commas
-    cleanJson = cleanJson.replace(/,\s*}/g, '}').replace(/,\s*]/g, ']');
-
-    // Fix r"latex"
-    cleanJson = cleanJson.replace(/r"([^"]*)"/g, '"$1"');
-
-    return JSON.parse(cleanJson);
-
-  } catch (err) {
-    console.log("⚠️ First parse failed → using fallback");
-
+  // ================= SAFE JSON =================
+  safeJsonParse(content: string) {
     try {
-      // 🔥 REMOVE MOST ERROR-PRONE FIELDS
-      let fallback = content
-        .replace(/"code":\s*"[\s\S]*?"/g, '"code": ""')
-        .replace(/"formula":\s*"[\s\S]*?"/g, '"formula": ""')
-        .replace(/"diagram":\s*"[\s\S]*?"/g, '"diagram": ""');
+      const match = content.match(/\{[\s\S]*\}/);
+      if (!match) throw new Error("No JSON");
 
-      const match = fallback.match(/\{[\s\S]*\}/);
-      if (!match) throw new Error("Fallback failed");
+      let clean = match[0];
 
-      let safeJson = match[0];
+      clean = clean.replace(/```json/g, '').replace(/```/g, '');
+      clean = clean.replace(/[\u0000-\u001F]+/g, '');
+      clean = clean.replace(/\\(?!["\\/bfnrtu])/g, '\\\\');
+      clean = clean.replace(/,\s*}/g, '}').replace(/,\s*]/g, ']');
 
-      // minimal cleaning
-      safeJson = safeJson.replace(/[\u0000-\u001F]+/g, '');
-      safeJson = safeJson.replace(/,\s*}/g, '}').replace(/,\s*]/g, ']');
+      return JSON.parse(clean);
 
-      return JSON.parse(safeJson);
-
-    } catch (err2) {
-      console.log("❌ Fallback also failed → returning safe default");
-
-      // 🔥 LAST RESORT (never crash API)
+    } catch {
       return {
         title: "Generated Topic",
-        slides: [
-          {
-            heading: "Overview",
-            points: ["Content could not be generated properly"],
-            formula: "",
-            code: "",
-            diagram: "",
-            imageHint: "education concept"
-          }
-        ]
+        slides: []
       };
     }
   }
-}
 
-  // ================= GENERATE CONTENT =================
+  // ================= TEXT OVERFLOW CONTROL =================
+  trimPoints(points: string[]) {
+    return points.map(p => {
+      if (p.length > 120) {
+        return p.slice(0, 110) + "...";
+      }
+      return p;
+    }).slice(0, 5); // max 5 bullets
+  }
+
+  // ================= MAIN =================
   async generateContent(course: string, topic: string, slides: number) {
     try {
+      if (slides < 5) slides = 5;
 
-      if (slides < 8) slides = 8;
+      const slidePlan = this.getSlidePlan(slides).join(", ");
 
-  
       const prompt = `
-You are an IIT professor creating high-quality lecture slides.
+You are an expert IIT professor creating high-quality, professional PPT slides.
 
 Course: ${course}
 Topic: ${topic}
 Slides Required: ${slides}
 
 STRICT RULES:
-- Generate EXACTLY ${slides} slides
-- Minimum slides = 8
-- Each slide MUST be UNIQUE
-- NO repetition
+- Generate EXACTLY ${slides} slides (including title & conclusion if present in plan)
+- Do NOT exceed or reduce slide count
+- Follow this exact order strictly:
+${slidePlan}
+- Each slide must cover a UNIQUE concept
+- No repetition across slides
 
-CONTENT RULES:
-- Each slide = ONE concept
-- Max 5 bullet points
-- Each bullet ≤ 15 words
-- Each bullet must explain WHY or HOW
-- Avoid generic text
+-------------------------------------
 
-STRUCTURE FLOW:
-1. Introduction
-2. Definition
-3. Theory
-4. Mathematical Insight
-5. Algorithm / Working
-6. Example
-7. Limitation
-8. Application
-9+ Advanced topics (if needed)
+CONTENT RULES (IIT LEVEL - STRICT):
 
-ADVANCED:
-- Include formula (valid LaTeX string, NO r"")
-- Include code (if applicable)
-- Include diagram explanation
+- Each slide must contain 3 to 5 bullet points ONLY
+- Each bullet must be clear, precise, and technically meaningful
+- Each bullet should be 10-18 words (single-line, no overflow)
+- Avoid long paragraphs
 
-IMAGE RULE (STRICT):
-- Each slide MUST include imageHint
-- imageHint = 1–3 keywords ONLY
-- Example: "svm boundary", "paging diagram"
-CRITICAL JSON RULES:
-- NEVER use double quotes inside text
-- Use single quotes for code
-- Avoid special characters like \ or "
-- Keep code minimal and safe
+- Each bullet must explain:
+  ✔ WHY the concept exists OR
+  ✔ HOW it works internally OR
+  ✔ WHAT impact it creates
 
-OUTPUT:
-Return STRICT JSON ONLY (no text outside JSON)
+- Avoid generic statements like:
+  ❌ "improves performance"
+  ❌ "used in many applications"
+  ❌ "important concept"
+
+- Use technical vocabulary wherever applicable:
+  (e.g., window size, ACK, throughput, buffer, congestion control)
+
+-------------------------------------
+
+SLIDE-SPECIFIC RULES (VERY IMPORTANT):
+
+1. Introduction Slide:
+- Focus on problem motivation
+- Explain limitations of naive approaches (e.g., stop-and-wait)
+- Do NOT give definition directly
+
+2. Definition Slide:
+- FIRST bullet MUST start in formal definition style:
+  👉 "${topic} is a method..." OR "${topic} is a technique..."
+- Keep it crisp and academic
+- Remaining bullets explain working intuition or purpose
+
+Example:
+✔ "Sliding Window Protocol is a flow control technique used in computer networks"
+✔ NOT vague or casual wording
+
+3. Concept / Theory Slides:
+- Explain core idea + mechanism
+- Include cause-effect relationships
+
+4. Working / Algorithm Slides:
+- Step-by-step explanation of process
+- Use logical flow (sender → receiver → ACK → adjustment)
+
+5. Example Slide:
+- Show practical scenario or data flow
+- Explain how concept behaves in real system
+
+6. Advantages / Limitations:
+- Must be analytical (not generic)
+- Include reasoning (WHY advantage exists)
+
+7. Conclusion Slide:
+- Summarize insights (not repeat definition)
+- Highlight overall impact and learning
+
+-------------------------------------
+
+LAYOUT RULE:
+
+- If diagram is present → use 2-column layout (text + image)
+- If NO diagram → use full-width text
+- Do NOT leave empty space
+
+-------------------------------------
+
+DIAGRAM RULE:
+
+- Include diagramCode ONLY for:
+  ✔ Working Principle
+  ✔ Algorithm
+  ✔ Example
+
+- Do NOT include diagrams for:
+  Introduction, Definition, Advantages, Conclusion
+
+- Each diagram must be UNIQUE and relevant
+- Do NOT repeat diagrams across slides
+
+-------------------------------------
+
+QUALITY CONTROL:
+
+- No repeated points
+- No vague wording
+- No filler text
+- Maintain academic tone throughout
+
+-------------------------------------
+
+OUTPUT FORMAT (STRICT JSON):
+
 {
   "title": "",
   "slides": [
     {
       "heading": "",
       "points": [],
-      "formula": "",
-      "code": "",
-      "diagram": "",
-      "imageHint": ""
+      "diagramCode": ""
     }
   ]
 }
 `;
 
-
       const response = await axios.post(
         "https://openrouter.ai/api/v1/chat/completions",
         {
-          model: "openai/gpt-4o-mini", // 🔥 MUCH MORE STABLE
-          messages: [{ role: "user", content: prompt }],
-          response_format: { type: "json_object" } // 🔥 CRITICAL FIX
+          model: "openai/gpt-4o-mini",
+          messages: [{ role: "user", content: prompt }]
         },
         {
           headers: {
             Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
-            "HTTP-Referer": "http://localhost:3000",
-            "X-Title": "AI Tutor",
           },
         }
       );
 
-      const content = response.data.choices[0].message.content;
+      const parsed = this.safeJsonParse(
+        response.data.choices[0].message.content
+      );
 
-      // ✅ SAFE PARSE
-      const parsed = this.safeJsonParse(content);
+      let slidesData = Array.isArray(parsed.slides) ? parsed.slides : [];
 
-      // ✅ CLEAN FORMULAS
-      parsed.slides = parsed.slides.map((slide: any) => ({
-        ...slide,
-        formula: this.cleanFormula(slide.formula)
-      }));
+      // ================= STRICT SLIDE FIX =================
+      slidesData = slidesData.slice(0, slides);
 
-      // ✅ REMOVE DUPLICATES
-      const cleaned = this.removeDuplicateSlides(parsed);
+      while (slidesData.length < slides) {
+        slidesData.push({
+          heading: `Concept ${slidesData.length + 1}`,
+          points: ["Explains concept", "Shows working", "Gives application"],
+          diagramCode: ""
+        });
+      }
 
-      // ✅ EVALUATE
-      this.evaluateSlides(cleaned);
+      // ================= PROCESSING =================
+      let diagramCount = 0;
 
-      return cleaned;
+      const finalSlides = slidesData.map((slide: any) => {
+        let diagram = "";
+
+        if (
+          (slide.heading.toLowerCase().includes("work") ||
+            slide.heading.toLowerCase().includes("algorithm") ||
+            slide.heading.toLowerCase().includes("example")) &&
+          diagramCount < 3
+        ) {
+          diagram = this.fixDiagramCode(slide.heading);
+          diagramCount++;
+        }
+
+        return {
+          heading: slide.heading,
+          points: this.trimPoints(slide.points || []),
+          diagramCode: diagram
+        };
+      });
+
+      const finalData = {
+        title: parsed.title || topic,
+        slides: finalSlides
+      };
+
+      // 🔥 IMPROVED EVALUATION
+      this.evaluateSlides(finalData);
+
+      return finalData;
 
     } catch (error: any) {
-      console.error("❌ AI ERROR:", error.response?.data || error.message);
-      throw new Error("AI content failed");
+      console.error("❌ AI ERROR:", error.message);
+      throw new Error("AI failed");
     }
   }
 
-  // ================= GENERATE PPT =================
+  // ================= ADVANCED EVALUATION =================
+  evaluateSlides(data: any) {
+    let total = 0;
+    let max = data.slides.length * 10;
+
+    data.slides.forEach((slide: any) => {
+      let score = 0;
+
+      // 1. Heading quality
+      if (slide.heading && slide.heading.length > 3) score += 1;
+
+      // 2. Bullet count
+      if (slide.points.length >= 3 && slide.points.length <= 5) score += 1;
+
+      // 3. Text length control
+      if (slide.points.every((p: string) => p.length < 120)) score += 1;
+
+      // 4. No overflow risk
+      if (slide.points.join(" ").length < 400) score += 1;
+
+      // 5. No repetition
+      const unique = new Set(slide.points);
+      if (unique.size === slide.points.length) score += 1;
+
+      // 6. Diagram relevance
+      if (
+        slide.diagramCode &&
+        (slide.heading.toLowerCase().includes("work") ||
+          slide.heading.toLowerCase().includes("algorithm") ||
+          slide.heading.toLowerCase().includes("example"))
+      ) score += 2;
+
+      // 7. Clean formatting
+      if (!slide.points.some((p: string) => p.includes("lorem"))) score += 1;
+
+      // 8. Readability
+      if (slide.points.every((p: string) => p.split(" ").length <= 15)) score += 1;
+
+      total += score;
+    });
+
+    console.log(`📊 QUALITY SCORE: ${total}/${max}`);
+  }
+
+  // ================= PPT =================
   async generatePPT(course: string, topic: string, slides: number) {
     const content = await this.generateContent(course, topic, slides);
-    return this.pptService.createPPT(content);
+    return this.pptService.createPPT(content, slides);
   }
 }

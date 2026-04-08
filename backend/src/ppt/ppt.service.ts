@@ -2,14 +2,7 @@ import { Injectable } from '@nestjs/common';
 import * as path from 'path';
 import * as fs from 'fs';
 import PptxGenJS from 'pptxgenjs';
-import axios from 'axios';
-
-const mjAPI = require("mathjax-node");
-
-mjAPI.config({
-  MathJax: { SVG: { font: "TeX" } }
-});
-mjAPI.start();
+import { exec } from 'child_process';
 
 @Injectable()
 export class PptService {
@@ -25,55 +18,43 @@ export class PptService {
       .trim();
   }
 
-  // ================= FORMULA =================
-  async renderFormula(latex: string, fileName: string): Promise<string> {
+  // ================= GENERATE DIAGRAM =================
+  async generateDiagram(code: string, fileName: string): Promise<string> {
     return new Promise((resolve, reject) => {
-      mjAPI.typeset(
-        { math: latex, format: "TeX", svg: true },
-        (data: any) => {
-          if (!data.svg) return reject("Formula failed");
-          const filePath = path.join(__dirname, '../../', fileName);
-          fs.writeFileSync(filePath, data.svg);
-          resolve(filePath);
+      const inputPath = path.join(__dirname, `../../${fileName}.mmd`);
+      const outputPath = path.join(__dirname, `../../${fileName}.png`);
+
+      fs.writeFileSync(inputPath, code);
+
+      exec(`npx mmdc -i ${inputPath} -o ${outputPath}`, (err) => {
+        if (err) {
+          console.log("Diagram generation failed:", err.message);
+          return reject(err);
         }
-      );
+        resolve(outputPath);
+      });
     });
   }
 
-  // ================= SAFE IMAGE FETCH =================
-async fetchImage(query: string): Promise<string | null> {
-  try {
-    const safeQuery = `${query} diagram`;
-
-    const url = `https://loremflickr.com/800/400/${encodeURIComponent(safeQuery)}`;
-    const filePath = path.join(__dirname, `../../img-${Date.now()}.jpg`);
-
-    const response = await axios({
-      url,
-      method: 'GET',
-      responseType: 'stream',
-      timeout: 2000, // 🔥 VERY IMPORTANT (reduce wait)
-    });
-
-    const writer = fs.createWriteStream(filePath);
-    response.data.pipe(writer);
-
-    return new Promise((resolve, reject) => {
-      writer.on('finish', () => resolve(filePath));
-      writer.on('error', reject);
-    });
-
-  } catch {
-    return null; // 🔥 instant skip
+  // ================= DIAGRAM CHECK =================
+  shouldShowDiagram(heading: string): boolean {
+    const allowed = ["working", "algorithm", "example"];
+    return allowed.some(key =>
+      heading?.toLowerCase().includes(key)
+    );
   }
-}
 
   // ================= MAIN =================
-  async createPPT(data: any): Promise<string> {
+  async createPPT(data: any, totalSlides: number): Promise<string> {
     const pptx = new PptxGenJS();
     pptx.layout = 'LAYOUT_16x9';
 
-    // 🎯 TITLE SLIDE
+    // ================= SLIDE DISTRIBUTION =================
+    // totalSlides includes title + conclusion
+    const contentSlidesCount = totalSlides - 2;
+    const contentSlides = (data.slides || []).slice(0, contentSlidesCount);
+
+    // ================= TITLE SLIDE =================
     const titleSlide = pptx.addSlide();
 
     titleSlide.addText(this.cleanText(data.title || "Lecture"), {
@@ -85,7 +66,7 @@ async fetchImage(query: string): Promise<string | null> {
       align: "center",
     });
 
-    titleSlide.addText("AI Generated Lecture", {
+    titleSlide.addText("AI Generated Presentation", {
       x: 1,
       y: 3,
       w: 8,
@@ -94,12 +75,8 @@ async fetchImage(query: string): Promise<string | null> {
       color: "666666",
     });
 
-    // 🔥 LIMIT IMAGE USAGE
-   let imageCount = 0;
-const MAX_IMAGES = 3; // 🔥 reduce from 5 → 3
-
-    // 🎯 CONTENT SLIDES
-    for (const slideData of data.slides) {
+    // ================= CONTENT SLIDES =================
+    for (const slideData of contentSlides) {
       if (!slideData?.heading) continue;
 
       const slide = pptx.addSlide();
@@ -107,7 +84,7 @@ const MAX_IMAGES = 3; // 🔥 reduce from 5 → 3
       // 🔹 TITLE
       slide.addText(this.cleanText(slideData.heading), {
         x: 0.5,
-        y: 0.5,
+        y: 1.8,
         w: 9,
         fontSize: 28,
         bold: true,
@@ -116,19 +93,35 @@ const MAX_IMAGES = 3; // 🔥 reduce from 5 → 3
       // 🔹 DIVIDER
       slide.addShape("rect", {
         x: 0.5,
-        y: 1.0,
+        y: 1.4,
         w: 9,
         h: 0.015,
         fill: { color: "666666" },
       });
 
-      const contentY = 3.3;
+      const contentY = 2.2;
 
-      // 🔹 BULLETS
-      const points = (slideData.points || [])
+      // ================= DIAGRAM CHECK =================
+      const hasDiagram =
+        slideData.diagramCode &&
+        this.shouldShowDiagram(slideData.heading);
+
+      // ================= BULLET RULES =================
+      let points = (slideData.points || [])
         .filter((p: string) => p && p.trim())
-        .slice(0, 5)
         .map((p: string) => this.cleanText(p));
+
+      if (hasDiagram) {
+        points = points.slice(0, 3); // STRICT 3 bullets
+      } else {
+        points = points.slice(0, 5); // 3–5 bullets
+      }
+
+      // 🔥 SINGLE LINE CONTROL (NO OVERFLOW)
+      points = points.map((p: string) => p.slice(0, 80));
+
+      // ================= LAYOUT =================
+      const textWidth = hasDiagram ? 4.5 : 8.5;
 
       slide.addText(
         points.map((p: string) => ({
@@ -138,71 +131,38 @@ const MAX_IMAGES = 3; // 🔥 reduce from 5 → 3
         {
           x: 0.7,
           y: contentY,
-          w: 4.5,
+          w: textWidth,
           fontSize: 20,
           lineSpacing: 30,
         }
       );
 
-      // 🔹 IMAGE (LIMITED + SAFE)
-let imageAdded = false;
+      // ================= DIAGRAM =================
+      if (hasDiagram) {
+        try {
+          const diagramPath = await this.generateDiagram(
+            slideData.diagramCode,
+            `diagram-${Date.now()}`
+          );
 
-if (slideData.imageHint && imageCount < MAX_IMAGES) {
-  const imgPath = await this.fetchImage(slideData.imageHint);
+          slide.addImage({
+            path: diagramPath,
+            x: 5.5,
+            y: contentY,
+            w: 4,
+            h: 3,
+          });
 
-  if (imgPath) {
-    slide.addImage({
-      path: imgPath,
-      x: 5.5,
-      y: contentY,
-      w: 4,
-      h: 3,
-    });
+        } catch (err) {
+          console.log("Diagram failed");
+        }
+      }
 
-    imageCount++;
-  }
-}
-// 🔥 CLEAN FALLBACK (no ugly text)
-if (!imageAdded) {
-  slide.addShape("rect", {
-    x: 5.5,
-    y: 2.2,
-    w: 4,
-    h: 3,
-    fill: { color: "F5F5F5" },
-  });
-
-  slide.addText("No Image", {
-    x: 6.5,
-    y: 3.2,
-    fontSize: 14,
-    color: "888888",
-  });
-}
-
-      // 🔹 FORMULA
-      // if (slideData.formula && slideData.formula.length < 50) {
-      //   try {
-      //     const formulaPath = await this.renderFormula(
-      //       slideData.formula,
-      //       `formula-${Date.now()}.svg`
-      //     );
-
-      //     slide.addImage({
-      //       path: formulaPath,
-      //       x: 0.7,
-      //       y: 4.5,
-      //       w: 4.5,
-      //       h: 0.6,
-      //     });
-      //   } catch {}
-      // }
-
-      // 🔹 CODE
+      // ================= OPTIONAL CODE =================
       if (slideData.code) {
         slide.addText(this.cleanText(slideData.code), {
           x: 0.7,
-          y: 5.5,
+          y: 5.2,
           w: 8.5,
           fontSize: 12,
           fontFace: "Courier New",
@@ -210,7 +170,7 @@ if (!imageAdded) {
       }
     }
 
-    // 🎯 CONCLUSION SLIDE
+    // ================= CONCLUSION SLIDE =================
     const conclusionSlide = pptx.addSlide();
 
     conclusionSlide.addText("Conclusion", {
@@ -221,11 +181,11 @@ if (!imageAdded) {
     });
 
     const conclusionPoints = [
-      "Concept establishes strong theoretical foundation for advanced systems.",
-      "Mathematical modeling ensures precision and analytical understanding.",
-      "Algorithmic implementation improves efficiency and scalability.",
-      "Practical applications demonstrate real-world system relevance.",
-      "Understanding limitations enables better system design decisions."
+      "Concept provides strong theoretical understanding",
+      "Improves system performance and efficiency",
+      "Widely used in real-world applications",
+      "Helps in designing optimized solutions",
+      "Foundation for advanced concepts"
     ];
 
     conclusionSlide.addText(
@@ -235,14 +195,14 @@ if (!imageAdded) {
       })),
       {
         x: 0.7,
-        y: 3.3,
-        w: 8,
+        y: 2.2,
+        w: 8.5,
         fontSize: 22,
         lineSpacing: 32,
       }
     );
 
-    // 🎯 SAVE FILE
+    // ================= SAVE FILE =================
     const fileName = `ppt-${Date.now()}.pptx`;
     const filePath = path.join(__dirname, '../../', fileName);
 
