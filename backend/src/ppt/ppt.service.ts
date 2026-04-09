@@ -2,207 +2,203 @@ import { Injectable } from '@nestjs/common';
 import * as path from 'path';
 import * as fs from 'fs';
 import PptxGenJS from 'pptxgenjs';
+import axios from 'axios';
 import { exec } from 'child_process';
 
 @Injectable()
 export class PptService {
 
-  // ================= CLEAN TEXT =================
   cleanText(text: string) {
     if (!text) return "";
-    return text
-      .replace(/[^\x00-\x7F]/g, '')
-      .replace(/[_\-]{2,}/g, '')
-      .replace(/[^\w\s.,():%]/g, '')
-      .replace(/\s+/g, ' ')
-      .trim();
+    return text.replace(/[^\x00-\x7F]/g, '').replace(/\s+/g, ' ').trim();
   }
 
-  // ================= GENERATE DIAGRAM =================
-  async generateDiagram(code: string, fileName: string): Promise<string> {
-    return new Promise((resolve, reject) => {
-      const inputPath = path.join(__dirname, `../../${fileName}.mmd`);
-      const outputPath = path.join(__dirname, `../../${fileName}.png`);
+  // ================= IMAGE RULE =================
+  shouldShowImage(heading: string): boolean {
+    const h = heading.toLowerCase();
+    return h.includes("core concept") || h.includes("application");
+  }
 
-      fs.writeFileSync(inputPath, code);
+  // ================= DIAGRAM RULE =================
+  shouldShowDiagram(heading: string): boolean {
+    return heading.toLowerCase().includes("working");
+  }
 
-      exec(`npx mmdc -i ${inputPath} -o ${outputPath}`, (err) => {
-        if (err) {
-          console.log("Diagram generation failed:", err.message);
-          return reject(err);
+  // ================= IMAGE QUERY =================
+  buildImageQuery(topic: string, heading: string) {
+    const h = heading.toLowerCase();
+
+    if (h.includes("core concept")) {
+      return `${topic} conceptual diagram labeled`;
+    }
+
+    if (h.includes("application")) {
+      return `${topic} industry use case illustration diagram`;
+    }
+
+    return `${topic} technical diagram`;
+  }
+
+  // ================= IMAGE FETCH =================
+  async fetchImage(query: string) {
+    try {
+      const res = await axios.get("https://api.unsplash.com/search/photos", {
+        params: { query, per_page: 1 },
+        headers: {
+          Authorization: `Client-ID ${process.env.UNSPLASH_ACCESS_KEY}`
         }
-        resolve(outputPath);
+      });
+
+      return res.data.results[0]?.urls?.regular || null;
+    } catch {
+      return null;
+    }
+  }
+
+  async downloadImage(url: string, name: string) {
+    const file = path.join(__dirname, `../../${name}.jpg`);
+    const res = await axios.get(url, { responseType: 'arraybuffer' });
+    fs.writeFileSync(file, res.data);
+    return file;
+  }
+
+  // ================= MERMAID =================
+  isValidMermaid(code: string): boolean {
+    if (!code) return false;
+    return code.trim().startsWith("graph TD");
+  }
+
+  async generateDiagram(code: string, file: string): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const input = path.join(__dirname, `../../${file}.mmd`);
+      const output = path.join(__dirname, `../../${file}.png`);
+
+      fs.writeFileSync(input, code);
+
+      exec(`npx mmdc -i ${input} -o ${output}`, (err) => {
+        if (err) reject(err);
+        else resolve(output);
       });
     });
-  }
-
-  // ================= DIAGRAM CHECK =================
-  shouldShowDiagram(heading: string): boolean {
-    const allowed = ["working", "algorithm", "example"];
-    return allowed.some(key =>
-      heading?.toLowerCase().includes(key)
-    );
   }
 
   // ================= MAIN =================
   async createPPT(data: any, totalSlides: number): Promise<string> {
+
     const pptx = new PptxGenJS();
     pptx.layout = 'LAYOUT_16x9';
 
-    // ================= SLIDE DISTRIBUTION =================
-    // totalSlides includes title + conclusion
-    const contentSlidesCount = totalSlides - 2;
-    const contentSlides = (data.slides || []).slice(0, contentSlidesCount);
+    let slideCount = 0;
 
-    // ================= TITLE SLIDE =================
+    // ===== TITLE =====
     const titleSlide = pptx.addSlide();
+    slideCount++;
 
-    titleSlide.addText(this.cleanText(data.title || "Lecture"), {
-      x: 1,
-      y: 2,
-      w: 8,
+    titleSlide.addText(this.cleanText(data.title), {
+      x: 1, y: 2, w: 8,
       fontSize: 36,
       bold: true,
-      align: "center",
+      align: "center"
     });
 
-    titleSlide.addText("AI Generated Presentation", {
-      x: 1,
-      y: 3,
-      w: 8,
-      fontSize: 18,
-      align: "center",
-      color: "666666",
-    });
+    let slides = data.slides || [];
 
-    // ================= CONTENT SLIDES =================
-    for (const slideData of contentSlides) {
-      if (!slideData?.heading) continue;
+    // 🔥 FORCE LAST SLIDE = CONCLUSION (NO EXTRA SLIDE)
+    if (slides.length > 0) {
+      slides[slides.length - 1] = {
+        heading: "Conclusion",
+        points: [
+          `${data.title} provides structured understanding of system behavior`,
+          `${data.title} improves efficiency and scalability in real-world systems`,
+          `${data.title} helps design optimized and reliable architectures`,
+          `${data.title} is widely used across multiple domains`,
+          `${data.title} forms a foundation for advanced concepts`
+        ],
+        diagramCode: ""
+      };
+    }
 
-      const slide = pptx.addSlide();
+    // ===== LOOP =====
+    for (let idx = 0; idx < slides.length && slideCount < totalSlides; idx++) {
 
-      // 🔹 TITLE
-      slide.addText(this.cleanText(slideData.heading), {
-        x: 0.5,
-        y: 1.8,
-        w: 9,
-        fontSize: 28,
-        bold: true,
-      });
+      const slideData = slides[idx];
+      if (!slideData || !slideData.heading) continue;
 
-      // 🔹 DIVIDER
-      slide.addShape("rect", {
-        x: 0.5,
-        y: 1.4,
-        w: 9,
-        h: 0.015,
-        fill: { color: "666666" },
-      });
+      const heading = this.cleanText(slideData.heading);
+      const rawPoints = (slideData.points || []).map(p => this.cleanText(p));
 
-      const contentY = 2.2;
+      const isAlgorithm = heading.toLowerCase().includes("algorithm");
 
-      // ================= DIAGRAM CHECK =================
-      const hasDiagram =
-        slideData.diagramCode &&
-        this.shouldShowDiagram(slideData.heading);
+      let visualRendered = false;
+      let imagePath: string | null = null;
 
-      // ================= BULLET RULES =================
-      let points = (slideData.points || [])
-        .filter((p: string) => p && p.trim())
-        .map((p: string) => this.cleanText(p));
+      try {
+        if (
+          !isAlgorithm &&
+          slideData.diagramCode &&
+          this.shouldShowDiagram(heading) &&
+          this.isValidMermaid(slideData.diagramCode)
+        ) {
+          imagePath = await this.generateDiagram(
+            slideData.diagramCode,
+            `diag-${Date.now()}`
+          );
+          visualRendered = true;
+        }
+        else if (!isAlgorithm && this.shouldShowImage(heading)) {
 
-      if (hasDiagram) {
-        points = points.slice(0, 3); // STRICT 3 bullets
-      } else {
-        points = points.slice(0, 5); // 3–5 bullets
+          const query = this.buildImageQuery(data.title, heading);
+          const url = await this.fetchImage(query);
+
+          if (url) {
+            imagePath = await this.downloadImage(url, `img-${Date.now()}`);
+            visualRendered = true;
+          }
+        }
+
+      } catch {
+        visualRendered = false;
       }
 
-      // 🔥 SINGLE LINE CONTROL (NO OVERFLOW)
-      points = points.map((p: string) => p.slice(0, 80));
+      // ===== BULLETS =====
+      let points = rawPoints
+        .filter(p => p && p.length > 10)
+        .slice(0, visualRendered ? 3 : 5);
 
-      // ================= LAYOUT =================
-      const textWidth = hasDiagram ? 4.5 : 8.5;
+      const slide = pptx.addSlide();
+      slideCount++;
+
+      slide.addText(heading, {
+        x: 0.5,
+        y: 0.4,
+        fontSize: 28,
+        bold: true
+      });
 
       slide.addText(
-        points.map((p: string) => ({
+        points.map(p => ({
           text: p,
           options: { bullet: true }
         })),
         {
           x: 0.7,
-          y: contentY,
-          w: textWidth,
-          fontSize: 20,
-          lineSpacing: 30,
+          y: 2.2,
+          w: visualRendered ? 4.5 : 8.5,
+          fontSize: visualRendered ? 18 : 20
         }
       );
 
-      // ================= DIAGRAM =================
-      if (hasDiagram) {
-        try {
-          const diagramPath = await this.generateDiagram(
-            slideData.diagramCode,
-            `diagram-${Date.now()}`
-          );
-
-          slide.addImage({
-            path: diagramPath,
-            x: 5.5,
-            y: contentY,
-            w: 4,
-            h: 3,
-          });
-
-        } catch (err) {
-          console.log("Diagram failed");
-        }
-      }
-
-      // ================= OPTIONAL CODE =================
-      if (slideData.code) {
-        slide.addText(this.cleanText(slideData.code), {
-          x: 0.7,
-          y: 5.2,
-          w: 8.5,
-          fontSize: 12,
-          fontFace: "Courier New",
+      if (visualRendered && imagePath) {
+        slide.addImage({
+          path: imagePath,
+          x: 5.5,
+          y: 2,
+          w: 4,
+          h: 3
         });
       }
     }
 
-    // ================= CONCLUSION SLIDE =================
-    const conclusionSlide = pptx.addSlide();
-
-    conclusionSlide.addText("Conclusion", {
-      x: 0.5,
-      y: 0.4,
-      fontSize: 30,
-      bold: true,
-    });
-
-    const conclusionPoints = [
-      "Concept provides strong theoretical understanding",
-      "Improves system performance and efficiency",
-      "Widely used in real-world applications",
-      "Helps in designing optimized solutions",
-      "Foundation for advanced concepts"
-    ];
-
-    conclusionSlide.addText(
-      conclusionPoints.map(p => ({
-        text: this.cleanText(p),
-        options: { bullet: true }
-      })),
-      {
-        x: 0.7,
-        y: 2.2,
-        w: 8.5,
-        fontSize: 22,
-        lineSpacing: 32,
-      }
-    );
-
-    // ================= SAVE FILE =================
     const fileName = `ppt-${Date.now()}.pptx`;
     const filePath = path.join(__dirname, '../../', fileName);
 
