@@ -45,27 +45,29 @@ export class TutorService {
   return plan;
 }
   // ================= SAFE JSON =================
-  safeJsonParse(content: string) {
-    try {
-      if (!content) return null;
+ safeJsonParse(content: string) {
+  try {
+    if (!content) return null;
 
-      let clean = content
-        .replace(/```json/g, '')
-        .replace(/```/g, '')
-        .trim();
+    let clean = content
+      .replace(/```json/g, '')
+      .replace(/```/g, '')
+      .trim();
 
-      const start = clean.indexOf('{');
-      const end = clean.lastIndexOf('}');
+    const start = clean.indexOf('{');
+    const end = clean.lastIndexOf('}');
 
-      if (start === -1 || end === -1) return null;
+    if (start === -1 || end === -1) return null;
 
-      clean = clean.substring(start, end + 1);
+    clean = clean.substring(start, end + 1);
 
-      return JSON.parse(clean);
-    } catch {
-      return null;
-    }
+    return JSON.parse(clean);
+
+  } catch (err) {
+    console.log("❌ JSON parse failed");
+    return null;
   }
+}
 
   // ================= REGENERATE SINGLE SLIDE =================
   async regenerateSlide(topic: string, heading: string) {
@@ -195,24 +197,29 @@ OUTPUT STRICT JSON:
       const res = await axios.post(
         "https://openrouter.ai/api/v1/chat/completions",
         {
-          model: "openai/gpt-4o-mini",
+           model: "meta-llama/llama-3-8b-instruct",
           messages: [{ role: "user", content: prompt }],
           temperature: 0.7
         },
         {
           headers: {
             Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`
-          }
+          },
+          timeout: 60000 // 🔥 IMPORTANT
+
         }
       );
 
       const parsed = this.safeJsonParse(
         res.data.choices[0].message.content
       );
+if (parsed && Array.isArray(parsed.slides)) {
+  const slide = parsed.slides[0];
 
-      if (parsed && Array.isArray(parsed.points) && parsed.points.length >= 3) {
-        return parsed.points.slice(0, 5);
-      }
+  if (slide?.points?.length >= 3) {
+    return slide.points.slice(0, 5);
+  }
+}
 
     } catch (err) {
       console.log("⚠️ Regeneration failed:", heading);
@@ -229,94 +236,299 @@ OUTPUT STRICT JSON:
   }
 
   // ================= MAIN =================
- async generateContent(course: string, topic: string, slides: number) {
+async generateContent(course: string, topic: string, slides: number) {
 
   const slidePlan = this.getSlidePlan(slides);
 
-  const response = await axios.post(
-    "https://openrouter.ai/api/v1/chat/completions",
-    {
-      model: "openai/gpt-4o-mini",
-      messages: [{
-        role: "user",
-        content: `Generate ${slides} PPT slides on ${topic} in JSON format.`
-      }],
-      temperature: 0.3
-    },
-    {
-      headers: {
-        Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`
-      }
-    }
-  );
+  const prompt = `
+Generate EXACTLY ${slides} PPT slides on "${topic}"
 
-  const parsed = this.safeJsonParse(
-    response.data.choices[0].message.content
-  );
+Rules:
+- Each slide must have heading + EXACTLY 5 bullet points
+- Working Principle MUST include Mermaid diagram (graph TD)
+- Last slide MUST be Conclusion
+- DO NOT return fewer slides
+- DO NOT return extra slides
+- Return ONLY valid JSON (no text, no explanation)
+
+Format:
+{
+  "title": "",
+  "slides": [
+    {
+      "heading": "",
+      "points": [],
+      "diagramCode": ""
+    }
+  ]
+}
+`;
+
+  let parsed;
+
+  try {
+    const response = await axios.post(
+      "https://openrouter.ai/api/v1/chat/completions",
+      {
+        model: "meta-llama/llama-3-8b-instruct",
+        messages: [{ role: "user", content: prompt }],
+        temperature: 0.2
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
+        },
+        timeout: 120000
+      }
+    );
+
+    console.log("🧠 RAW AI OUTPUT:", response.data.choices[0].message.content);
+
+    parsed = this.safeJsonParse(
+      response.data.choices[0].message.content
+    );
+
+  } catch (err) {
+    console.log("❌ AI FAILED → using full fallback");
+    parsed = null;
+  }
 
   let aiSlides = parsed?.slides || [];
 
-  const finalSlides: {
-    heading: string;
-    points: string[];
-    diagramCode: string;
-  }[] = [];
-
-  for (const heading of slidePlan) {
-
-    const aiSlide = aiSlides.find(s =>
-      s.heading?.toLowerCase().includes(heading.toLowerCase())
-    );
-
-    let points = aiSlide?.points || [];
-
-    // remove duplicates
-    points = [...new Set(points)];
-
-    // detect weak slides
-    const isWeak =
-      points.length < 5 ||
-      points.some(p => !p || p.length < 10);
-
-    if (isWeak) {
-      console.log("🔄 Fixing:", heading);
-      points = await this.regenerateSlide(topic, heading);
-    }
-
-    if (!points || points.length === 0) {
-      points = await this.regenerateSlide(topic, heading);
-    }
-
-    finalSlides.push({
-      heading,
-      points: points.slice(0, 5),
-      diagramCode: aiSlide?.diagramCode || ""
-    });
+  // ✅ FORCE LENGTH (VERY IMPORTANT)
+  while (aiSlides.length < slides) {
+    aiSlides.push(null);
   }
 
-  // 🔥🔥 FINAL FIX: FORCE LAST SLIDE = CONCLUSION (NO EXTRA SLIDE)
-  // 🔥 ADD CONCLUSION AS LAST CONTENT SLIDE
-finalSlides.push({
-  heading: "Conclusion",
-  points: [
-    `${topic} provides structured understanding of system behavior`,
-    `${topic} improves efficiency and scalability in real-world systems`,
-    `${topic} helps design optimized and reliable architectures`,
-    `${topic} is widely used across multiple domains`,
-    `${topic} forms a foundation for advanced concepts`
-  ],
-  diagramCode: ""
-});
+ const finalSlides: {
+  heading: string;
+  points: string[];
+  diagramCode: string;
+}[] = [];
+
+for (let i = 0; i < slidePlan.length; i++) {
+  const heading = slidePlan[i];
+  const aiSlide = aiSlides[i];
+
+  let points = aiSlide?.points || [];
+
+  points = [...new Set(points)];
+
+  if (!aiSlide || !points || points.length < 3) {
+    console.log("⚠️ Using fallback:", heading);
+
+    points = [
+      `${heading} explains the concept of ${topic}`,
+      `${heading} improves system efficiency and performance`,
+      `${heading} is widely used in real-world applications`,
+      `${heading} helps in designing optimized systems`,
+      `${heading} plays an important role in ${topic}`
+    ];
+  }
+
+  finalSlides.push({
+    heading,
+    points: points.slice(0, 5),
+    diagramCode: aiSlide?.diagramCode || ""
+  });
+}
+
+  console.log("FINAL SLIDES:", finalSlides.length);
 
   return {
     title: parsed?.title || topic,
-    slides: finalSlides
+    slides: finalSlides.slice(0, slides),
   };
 }
+async generateQuiz(topic: string, slides: any[]) {
 
+  const prompt = `
+Generate 5 multiple choice questions from the topic and slides.
+
+Topic: ${topic}
+
+Rules:
+- 5 questions
+- Each has 4 options
+- Only 1 correct answer
+- Questions must be concept-based
+Return ONLY JSON.
+Do NOT include any text before or after JSON.
+Return JSON:
+{
+  "questions": [
+    {
+      "question": "",
+      "options": ["", "", "", ""],
+      "answer": ""
+    }
+  ]
+}
+`;
+
+  try {
+    const res = await axios.post(
+      "https://openrouter.ai/api/v1/chat/completions",
+      {
+          model: "meta-llama/llama-3-8b-instruct",
+        messages: [{ role: "user", content: prompt }],
+        temperature: 0.5
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`
+        },
+        timeout: 60000 // 🔥 IMPORTANT
+      }
+    );
+
+    const parsed = this.safeJsonParse(
+      res.data.choices[0].message.content
+    );
+
+    return parsed || { questions: [] };
+
+  } catch (err) {
+    return { questions: [] };
+  }
+}
+async explainSlide(topic: string, heading: string, points: string[]) {
+
+  const prompt = `
+Explain this slide in simple terms.
+
+Topic: ${topic}
+Slide: ${heading}
+
+Content:
+${points.join("\n")}
+
+Rules:
+- Simple explanation
+- Real-world analogy if possible
+- 5-6 lines
+
+Return JSON:
+{
+  "explanation": ""
+}
+`;
+
+  try {
+    const res = await axios.post(
+      "https://openrouter.ai/api/v1/chat/completions",
+      {
+          model: "meta-llama/llama-3-8b-instruct",
+        messages: [{ role: "user", content: prompt }],
+        temperature: 0.6
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`
+        },
+        timeout: 60000 // 🔥 IMPORTANT
+      }
+    );
+
+    const parsed = this.safeJsonParse(
+      res.data.choices[0].message.content
+    );
+
+    return parsed || { explanation: "" };
+
+  } catch {
+    return { explanation: "" };
+  }
+}
+evaluateSlides(slides: any[]) {
+
+  let score = 0;
+
+  let clarity = 0;
+  let depth = 0;
+  let structure = 0;
+  let visuals = 0;
+
+  slides.forEach(slide => {
+
+    const points = slide.points || [];
+
+    // Structure
+    if (points.length === 5) structure += 1;
+
+    // Clarity
+    if (points.every(p => p.length > 20)) clarity += 1;
+
+    // Depth
+    if (points.some(p => p.includes("because") || p.includes("improves"))) {
+      depth += 1;
+    }
+
+    // Visuals
+    if (slide.diagramCode) visuals += 1;
+
+  });
+
+  score = clarity + depth + structure + visuals;
+
+  return {
+    score: Math.min(score * 2, 40),
+    breakdown: {
+      clarity,
+      depth,
+      structure,
+      visuals
+    },
+    improvements: [
+      "Add more real-world examples",
+      "Increase explanation depth",
+      "Use diagrams where possible"
+    ]
+  };
+}
+async chat({ course, question }: any) {
+  const prompt = `
+You are an AI Tutor for ${course}.
+
+Answer the question clearly and concisely:
+${question}
+`;
+
+  try {
+    const res = await axios.post(
+      "https://openrouter.ai/api/v1/chat/completions",
+      {
+      model: "meta-llama/llama-3-8b-instruct",
+        messages: [{ role: "user", content: prompt }],
+        temperature: 0.7
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`
+        },
+        timeout: 60000 // 🔥 IMPORTANT
+      }
+    );
+
+    const response = res.data.choices[0].message.content;
+
+    return {
+      content: response,
+    };
+  } catch (err) {
+    return {
+      content: "I could not generate a response. Please try again.",
+    };
+  }
+}
   // ================= PPT =================
   async generatePPT(course: string, topic: string, slides: number) {
     const content = await this.generateContent(course, topic, slides);
-    return this.pptService.createPPT(content, slides);
+    const filePath = await this.pptService.createPPT(content, slides);
+
+return {
+  slides: content.slides,
+  file: filePath,
+};
   }
 }

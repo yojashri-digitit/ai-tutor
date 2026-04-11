@@ -1,0 +1,123 @@
+// store/useAppStore.ts
+import { create } from "zustand";
+
+//////////////////////////////////////////////////////
+// 🧠 TYPES
+//////////////////////////////////////////////////////
+
+type Message = {
+  role: "user" | "bot";
+  text: string;
+};
+
+type DocumentType = {
+  name: string;
+  date: string;
+  versionId: number;
+};
+
+type State = {
+  //////////////////////////////////////////////////////
+  // 📊 PPT
+  //////////////////////////////////////////////////////
+  ppt: any;
+  setPPT: (data: any) => void;
+  clearPPT: () => void;
+
+  //////////////////////////////////////////////////////
+  // 🧠 QUIZ
+  //////////////////////////////////////////////////////
+  quiz: any;
+  setQuiz: (data: any) => void;
+  clearQuiz: () => void;
+
+  //////////////////////////////////////////////////////
+  // 💬 CHAT
+  //////////////////////////////////////////////////////
+  messages: Message[];
+  addMessage: (msg: Message) => void;
+  clearMessages: () => void;
+
+  //////////////////////////////////////////////////////
+  // 📄 DOCUMENTS
+  //////////////////////////////////////////////////////
+  documents: DocumentType[];
+  activeDoc: number | null;
+  versionId: number | null;
+
+  addDocument: (doc: DocumentType) => void;
+  setActiveDoc: (index: number) => void;
+  setVersionId: (id: number) => void;
+  clearDocuments: () => void;
+
+  //////////////////////////////////////////////////////
+  // 🔄 GLOBAL RESET (VERY IMPORTANT)
+  //////////////////////////////////////////////////////
+  resetAll: () => void;
+};
+
+//////////////////////////////////////////////////////
+// 🚀 STORE
+//////////////////////////////////////////////////////
+
+export const useAppStore = create<State>((set) => ({
+  //////////////////////////////////////////////////////
+  // PPT
+  //////////////////////////////////////////////////////
+  ppt: null,
+  setPPT: (data) => set({ ppt: data }),
+  clearPPT: () => set({ ppt: null }),
+
+  //////////////////////////////////////////////////////
+  // QUIZ
+  //////////////////////////////////////////////////////
+  quiz: null,
+  setQuiz: (data) => set({ quiz: data }),
+  clearQuiz: () => set({ quiz: null }),
+
+  //////////////////////////////////////////////////////
+  // CHAT
+  //////////////////////////////////////////////////////
+  messages: [],
+  addMessage: (msg) =>
+    set((state) => ({
+      messages: [...state.messages, msg],
+    })),
+  clearMessages: () => set({ messages: [] }),
+
+  //////////////////////////////////////////////////////
+  // DOCUMENTS
+  //////////////////////////////////////////////////////
+  documents: [],
+  activeDoc: null,
+  versionId: null,
+
+  addDocument: (doc) =>
+    set((state) => ({
+      documents: [doc, ...state.documents],
+    })),
+
+  setActiveDoc: (index) => set({ activeDoc: index }),
+
+  setVersionId: (id) => set({ versionId: id }),
+
+  clearDocuments: () =>
+    set({
+      documents: [],
+      activeDoc: null,
+      versionId: null,
+    }),
+
+  //////////////////////////////////////////////////////
+  // 🔥 RESET EVERYTHING (IMPORTANT FOR LOGOUT)
+  //////////////////////////////////////////////////////
+  resetAll: () =>
+    set({
+      ppt: null,
+      quiz: null,
+      messages: [],
+      documents: [],
+      activeDoc: null,
+      versionId: null,
+    }),
+}));

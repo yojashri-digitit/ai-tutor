@@ -7,20 +7,114 @@ generator client {
   provider = "prisma-client-js"
 }
 
+//////////////////////////////////////////////////////
+// 👤 USER
+//////////////////////////////////////////////////////
+
+model User {
+  id           Int      @id @default(autoincrement())
+  name         String
+  email        String   @unique
+  password     String
+  refreshToken String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  documents    Document[]
+  chatSessions ChatSession[]
+}
+
+//////////////////////////////////////////////////////
+// 📄 DOCUMENT (each upload = new row ✅)
+//////////////////////////////////////////////////////
+
 model Document {
   id        Int      @id @default(autoincrement())
   name      String
-  content   String
+  fileType  String?
+  fileSize  Int?
   createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  chunks    Chunk[]
+  status String @default("processed")
+
+  userId Int
+  user   User @relation(fields: [userId], references: [id])
+
+  versions DocumentVersion[]
+  chats    ChatSession[]
+
+  @@index([userId])
 }
 
-model Chunk {
-  id         Int      @id @default(autoincrement())
-  content    String
-  embedding  Unsupported("vector(768)")
+//////////////////////////////////////////////////////
+// 🔁 DOCUMENT VERSION
+//////////////////////////////////////////////////////
 
+model DocumentVersion {
+  id         Int      @id @default(autoincrement())
   documentId Int
-  document   Document @relation(fields: [documentId], references: [id])
+  document   Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  versionNumber Int
+  hash          String
+  createdAt     DateTime @default(now())
+
+  chunks       Chunk[]
+  chatSessions ChatSession[]
+
+  @@index([documentId])
+  @@index([hash])
+}
+
+//////////////////////////////////////////////////////
+// 💬 CHAT SESSION (NEW 🔥)
+//////////////////////////////////////////////////////
+
+model ChatSession {
+  id         Int      @id @default(autoincrement())
+  documentId Int
+  versionId  Int // ✅ added
+  userId     Int
+  createdAt  DateTime @default(now())
+
+  document Document        @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  version  DocumentVersion @relation(fields: [versionId], references: [id], onDelete: Cascade)
+  user     User            @relation(fields: [userId], references: [id])
+
+  messages Message[]
+
+  @@index([userId])
+  @@index([documentId])
+}
+
+//////////////////////////////////////////////////////
+// 🧵 MESSAGE (NEW 🔥)
+//////////////////////////////////////////////////////
+
+model Message {
+  id            Int      @id @default(autoincrement())
+  chatSessionId Int
+  role          String // "user" | "bot"
+  content       String
+  createdAt     DateTime @default(now())
+
+  chat ChatSession @relation(fields: [chatSessionId], references: [id], onDelete: Cascade)
+
+  @@index([chatSessionId])
+}
+
+//////////////////////////////////////////////////////
+// 🧠 CHUNK
+//////////////////////////////////////////////////////
+
+model Chunk {
+  id        Int                        @id @default(autoincrement())
+  content   String
+  embedding Unsupported("vector(768)")
+
+  versionId Int
+  version   DocumentVersion @relation(fields: [versionId], references: [id], onDelete: Cascade)
+
+  @@index([versionId])
 }

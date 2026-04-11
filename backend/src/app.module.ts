@@ -9,12 +9,15 @@ import { RagModule } from './rag/rag.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { TutorModule } from './tutor/tutor.module';
 import { ConfigModule } from '@nestjs/config/dist/config.module';
+import { AuthModule } from './auth/auth.module';
+import { ChatModule } from './chat/chat.module';
 @Module({
   imports: [
-    DocumentModule,PrismaModule,RagModule, TutorModule,
+    DocumentModule,PrismaModule,RagModule, TutorModule,ChatModule,
     ConfigModule.forRoot({
       isGlobal: true, // 🔥 important
     }),
+    AuthModule,
     
   ],
   controllers: [DocumentController, RagController],

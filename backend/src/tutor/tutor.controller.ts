@@ -2,6 +2,8 @@ import {
   Body,
   Controller,
   Post,
+  Get,
+  Query,
   Res,
   BadRequestException,
 } from '@nestjs/common';
@@ -17,49 +19,90 @@ export class TutorController {
   async generateContent(@Body() body: any) {
     const { course, topic } = body;
 
-    // 🔒 Validation
     if (!course || !topic) {
       throw new BadRequestException('course and topic are required');
     }
 
-    // 🔥 Notes always generate with strong depth (min slides logic handled in service)
     return this.tutorService.generateContent(course, topic, 8);
   }
 
-  // ================= ✅ GENERATE PPT =================
-  @Post('generate-ppt')
-  async generatePPT(@Body() body: any, @Res() res: Response) {
-    const { course, topic, slides } = body;
+  // ================= ✅ GENERATE PPT (FIXED) =================
+//   @Post('generate-ppt')
+//   async generatePPT(@Body() body: any) {
+//     const { course, topic, slides } = body;
 
-    // 🔒 Validation
-    if (!course || !topic) {
-      throw new BadRequestException('course and topic are required');
-    }
+//     if (!course || !topic) {
+//       throw new BadRequestException('course and topic are required');
+//     }
 
-    // 🔥 STRICT SLIDE RULE (UPDATED)
-    // Minimum = 8, Maximum = 20
-    const slideCount =
-      typeof slides === 'number' && slides >= 8 && slides <= 20
-        ? slides
-        : 8;
+//     const slideCount =
+//       typeof slides === 'number' && slides >= 1 && slides <= 20
+//         ? slides
+//         : 5;
 
-    const filePath = await this.tutorService.generatePPT(
-      course,
-      topic,
-      slideCount
-    );
+//     // 🔥 Get BOTH slides + file
+//   const content = await this.tutorService.generateContent(
+//   course,
+//   topic,
+//   slideCount
+// );
 
-    // 📥 CLEAN FILE NAME
-    const safeCourse = course.replace(/\s+/g, '-');
-    const safeTopic = topic.replace(/\s+/g, '-');
+// const filePath = await this.tutorService.generatePPT(
+//   content, // ✅ pass content
+//   slideCount
+// );
 
-    // 📥 Proper headers
-    res.set({
-      'Content-Type':
-        'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-      'Content-Disposition': `attachment; filename=${safeCourse}-${safeTopic}.pptx`,
-    });
+//     return {
+//       slides: content.slides,
+//       file: filePath,
+//     };
+//   }
+@Post('generate-ppt')
+async generatePPT(@Body() body: any) {
+  const { course, topic, slides } = body;
 
-    return res.download(filePath);
+  if (!course || !topic) {
+    throw new BadRequestException('course and topic are required');
   }
+
+  const result = await this.tutorService.generatePPT(course, topic, slides);
+
+  console.log("Sending response:", result);
+
+  return {
+    slides: result.slides,
+    file: result.file
+  };
+}
+  // ================= ✅ DOWNLOAD =================
+  @Get('download')
+  downloadFile(@Query('file') file: string, @Res() res: Response) {
+    return res.download(file);
+  }
+
+  // ================= OTHER APIs =================
+  // @Post('generate-quiz')
+  // async generateQuiz(@Body() body: any) {
+  //   return this.tutorService.generateQuiz(body.topic, body.slides);
+  // }
+
+  // @Post('explain-slide')
+  // async explainSlide(@Body() body: any) {
+  //   return this.tutorService.explainSlide(
+  //     body.topic,
+  //     body.heading,
+  //     body.points
+  //   );
+  // }
+
+  // @Post('evaluate')
+  // async evaluate(@Body() body: any) {
+  //   return this.tutorService.evaluateSlides(body.slides);
+  // }
+
+  // @Post('chat')
+  // async chat(@Body() body: { course: string; question: string }) {
+  //   return this.tutorService.chat(body);
+  // }
+
 }
