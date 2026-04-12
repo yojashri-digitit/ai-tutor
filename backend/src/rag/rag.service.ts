@@ -1,7 +1,12 @@
-import { Injectable, BadRequestException } from '@nestjs/common';
-import axios from 'axios';
-import { PrismaService } from '../prisma/prisma.service';
-import { ChatService } from '../chat/chat.service';
+import {
+  Injectable,
+  BadRequestException,
+  HttpException,
+  HttpStatus,
+} from "@nestjs/common";
+import axios from "axios";
+import { PrismaService } from "../prisma/prisma.service";
+import { ChatService } from "../chat/chat.service";
 
 @Injectable()
 export class RagService {
@@ -17,8 +22,8 @@ export class RagService {
     try {
       if (!text || text.trim().length < 3) return [];
 
-      const res = await axios.post('http://localhost:11434/api/embeddings', {
-        model: 'nomic-embed-text',
+      const res = await axios.post("http://localhost:11434/api/embeddings", {
+        model: "nomic-embed-text",
         prompt: text,
       });
 
@@ -30,170 +35,212 @@ export class RagService {
   }
 
   //////////////////////////////////////////////////////
-  // 🚀 ASK QUESTION (HYBRID FINAL 🔥)
+  // 🚀 MAIN ASK FUNCTION (FINAL 🔥)
   //////////////////////////////////////////////////////
   async askQuestion(
     question: string,
-    versionId: number,
-    chatSessionId: number
+    versionId: number | null,
+    chatSessionId: number | null,
+    userId: number, // ✅ FIXED
+    course?: string
   ) {
     try {
       ////////////////////////////////////////////
       // ✅ VALIDATION
       ////////////////////////////////////////////
       if (!question?.trim()) {
-        throw new BadRequestException('Enter a valid question');
+        throw new BadRequestException("Enter a valid question");
       }
 
-      if (!versionId) {
-        throw new BadRequestException('versionId required');
+      if (!userId) {
+        throw new BadRequestException("User required");
       }
 
+      if (!question || question.trim().length < 3) {
+  throw new BadRequestException("Invalid topic");
+}
+
+const invalidWords = ["abc", "xyz", "asdf", "mmmm"];
+
+if (invalidWords.includes(question.toLowerCase())) {
+  throw new BadRequestException("Invalid topic provided");
+}
+
+// extra strong validation
+if (!/[a-zA-Z]{3,}/.test(question)) {
+  throw new BadRequestException("Enter meaningful topic");
+}
+      ////////////////////////////////////////////
+      // 🆕 CREATE CHAT IF NOT EXISTS
+      ////////////////////////////////////////////
       if (!chatSessionId) {
-        throw new BadRequestException('chatSessionId required');
+        const newChat = await this.chatService.createSession(
+          userId,
+         null,
+         null
+        );
+        chatSessionId = newChat.id;
+      }
+
+      ////////////////////////////////////////////
+      // 🚫 RATE LIMIT
+      ////////////////////////////////////////////
+      const recent = await this.prisma.message.count({
+        where: {
+          chatSessionId,
+          createdAt: {
+            gte: new Date(Date.now() - 60 * 1000),
+          },
+        },
+      });
+
+      if (recent > 10) {
+        throw new HttpException(
+          "Too many requests, slow down",
+          HttpStatus.TOO_MANY_REQUESTS
+        );
       }
 
       ////////////////////////////////////////////
       // 💾 SAVE USER MESSAGE
       ////////////////////////////////////////////
-      await this.chatService.saveMessage(
-        chatSessionId,
-        "user",
-        question
-      );
+      await this.chatService.saveMessage(chatSessionId, "user", question);
 
       ////////////////////////////////////////////
-      // 🔥 EMBEDDING
+      // 🧠 CONTEXT (DOC MODE)
       ////////////////////////////////////////////
-      const embedding = await this.getEmbedding(question);
+      let context = "";
 
-      if (!embedding.length) {
-        throw new BadRequestException('Embedding failed');
-      }
+      if (versionId) {
+        const embedding = await this.getEmbedding(question);
 
-      const vector = `[${embedding.join(',')}]`;
+        if (embedding.length) {
+          const vector = `[${embedding.join(",")}]`;
 
-      ////////////////////////////////////////////
-      // 🔥 KEYWORD EXTRACTION (HYBRID)
-      ////////////////////////////////////////////
-      const keywords = question
-        .toLowerCase()
-        .split(" ")
-        .filter((w) => w.length > 3)
-        .slice(0, 5);
+          const results = await this.prisma.$queryRawUnsafe(`
+            SELECT content
+            FROM "Chunk"
+            WHERE "versionId" = ${versionId}
+            ORDER BY embedding <-> '${vector}'::vector
+            LIMIT 10;
+          `) as { content: string }[];
 
-      const keywordCondition = keywords.length
-        ? keywords.map((w) => `content ILIKE '%${w}%'`).join(" OR ")
-        : "FALSE";
-
-      ////////////////////////////////////////////
-      // 🔍 HYBRID SEARCH
-      ////////////////////////////////////////////
-      const results = await this.prisma.$queryRawUnsafe(`
-        SELECT content,
-          (embedding <-> '${vector}'::vector) AS vector_score,
-          CASE WHEN ${keywordCondition} THEN 0 ELSE 0.3 END AS keyword_score
-        FROM "Chunk"
-        WHERE "versionId" = ${versionId}
-        ORDER BY (embedding <-> '${vector}'::vector) +
-                 (CASE WHEN ${keywordCondition} THEN 0 ELSE 0.3 END)
-        LIMIT 15;
-      `) as { content: string }[];
-
-      console.log("🔍 Hybrid chunks:", results.length);
-
-      ////////////////////////////////////////////
-      // ❌ NO RESULTS
-      ////////////////////////////////////////////
-      if (!results.length) {
-        const fallback = "No relevant content found in this document.";
-
-        await this.chatService.saveMessage(
-          chatSessionId,
-          "assistant",
-          fallback
-        );
-
-        return { answer: fallback, sources: [] };
+          context = results
+            .map((r) => r.content)
+            .join("\n\n")
+            .slice(0, 6000);
+        }
       }
 
       ////////////////////////////////////////////
-      // 🧠 CONTEXT
+      // 🔥 PROMPT (SMART MODE)
       ////////////////////////////////////////////
-      const context = results
-        .map((r) => r.content)
-        .join('\n\n')
-        .slice(0, 8000);
+      const isDocMode = !!versionId;
 
-      ////////////////////////////////////////////
-      // 🔥 MODE DETECTION
-      ////////////////////////////////////////////
-      const isDetailed =
-        question.toLowerCase().includes("explain") ||
-        question.toLowerCase().includes("detail") ||
-        question.toLowerCase().includes("elaborate");
-
-      ////////////////////////////////////////////
-      // 🤖 LLM CALL (FIXED 🔥)
-      ////////////////////////////////////////////
-      const response = await axios.post(
-        "https://openrouter.ai/api/v1/chat/completions",
-        {
-          model: "meta-llama/llama-3-8b-instruct",
-          messages: [
-            {
-              role: "system",
-              content: `
+      const prompt = `
 You are an AI Tutor.
 
-RULES:
+MODE:
+${isDocMode ? "DOCUMENT MODE (strictly use context)" : "TOPIC MODE (generate notes)"}
 
-1. NORMAL:
-- Answer ONLY from context
+Course: ${course || "General"}
+Topic: ${question}
 
-2. DETAILED:
-- Use context + external knowledge
-- Separate clearly:
-  - From Document
-  - Additional Explanation
+${context ? `Context:\n${context}` : ""}
 
-3. IRRELEVANT:
-- If not related → say "Not related to document"
-`,
-            },
-            {
-              role: "user",
-              content: `
-Context:
-${context}
+Generate structured notes:
 
-Question:
-${question}
+FORMAT:
+# ${question}
 
-Mode: ${isDetailed ? "DETAILED" : "STRICT"}
+## 1. Introduction
+## 2. Key Concepts
+## 3. Detailed Explanation
+## 4. Examples
+## 5. Important Points
+## 6. Summary
 
-Answer:
-`,
-            },
-          ],
-          temperature: 0.2,
-        },
-        {
-          headers: {
-            Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
+STYLE:
+- Clear
+- Structured
+- Student-friendly
+`;
+
+      ////////////////////////////////////////////
+      // 🤖 PRIMARY MODEL
+      ////////////////////////////////////////////
+      let answer = "";
+
+      try {
+        const response = await axios.post(
+          "https://openrouter.ai/api/v1/chat/completions",
+          {
+            model: "meta-llama/llama-3-8b-instruct",
+            messages: [{ role: "user", content: prompt }],
+            temperature: 0.3,
           },
-        }
-      );
+          {
+            headers: {
+              Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
+            },
+          }
+        );
+
+        answer = response.data?.choices?.[0]?.message?.content || "";
+      } catch {
+        console.log("⚠️ Primary model failed");
+      }
 
       ////////////////////////////////////////////
-      // 🧠 RESPONSE CLEAN
+      // 🔁 FALLBACK MODEL
       ////////////////////////////////////////////
-      let answer =
-        response.data?.choices?.[0]?.message?.content?.trim() ||
-        "Not found in document";
+      if (!answer || answer.length < 20) {
+        const fallback = await axios.post(
+          "https://openrouter.ai/api/v1/chat/completions",
+          {
+            model: "mistralai/mistral-7b-instruct",
+            messages: [{ role: "user", content: prompt }],
+          },
+          {
+            headers: {
+              Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
+            },
+          }
+        );
 
-      if (answer.length < 5) {
-        answer = "Not found in document";
+        answer =
+          fallback.data?.choices?.[0]?.message?.content ||
+          "Failed to generate";
+      }
+
+      ////////////////////////////////////////////
+      // 🧠 EVALUATION MODEL
+      ////////////////////////////////////////////
+      try {
+        const evalRes = await axios.post(
+          "https://openrouter.ai/api/v1/chat/completions",
+          {
+            model: "meta-llama/llama-3-8b-instruct",
+            messages: [
+              {
+                role: "user",
+                content: `Rate this answer out of 10:\n${answer}`,
+              },
+            ],
+          },
+          {
+            headers: {
+              Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
+            },
+          }
+        );
+
+        console.log(
+          "📊 Quality:",
+          evalRes.data?.choices?.[0]?.message?.content
+        );
+      } catch {
+        console.log("⚠️ Evaluation skipped");
       }
 
       ////////////////////////////////////////////
@@ -210,15 +257,11 @@ Answer:
       ////////////////////////////////////////////
       return {
         answer,
-        sources: results.map((r, i) => ({
-          id: i + 1,
-          preview: r.content.slice(0, 120),
-        })),
+        chatSessionId, // 🔥 IMPORTANT for frontend
       };
-
     } catch (error: any) {
       console.error("❌ RAG ERROR:", error.message);
-      throw new BadRequestException('Failed to generate answer');
+      throw new BadRequestException("Failed to generate answer");
     }
   }
 }

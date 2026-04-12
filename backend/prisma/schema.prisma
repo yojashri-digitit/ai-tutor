@@ -73,14 +73,18 @@ model DocumentVersion {
 
 model ChatSession {
   id         Int      @id @default(autoincrement())
-  documentId Int
-  versionId  Int // ✅ added
+
+  documentId Int?     // ✅ OPTIONAL
+  versionId  Int?     // ✅ OPTIONAL
+
   userId     Int
+  title      String?  // ✅ NEW (for normal chats)
+
   createdAt  DateTime @default(now())
 
-  document Document        @relation(fields: [documentId], references: [id], onDelete: Cascade)
-  version  DocumentVersion @relation(fields: [versionId], references: [id], onDelete: Cascade)
-  user     User            @relation(fields: [userId], references: [id])
+  document Document?        @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  version  DocumentVersion? @relation(fields: [versionId], references: [id], onDelete: Cascade)
+  user     User             @relation(fields: [userId], references: [id])
 
   messages Message[]
 

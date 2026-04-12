@@ -5,7 +5,7 @@ import axios from "axios";
 import toast from "react-hot-toast";
 import { useRouter } from "next/navigation";
 import { downloadPPT } from "@/utils/downloadPPT";
-
+import Header from "@/components/Header";
 export default function PPTPage() {
   const router = useRouter();
 
@@ -79,9 +79,9 @@ export default function PPTPage() {
       toast.dismiss();
 
       if (axios.isCancel(e)) {
-        toast.error("⛔ Stopped");
+        toast.error(" Stopped");
       } else {
-        toast.error("❌ Failed");
+        toast.error("Failed");
       }
     } finally {
       setLoading(false);
@@ -115,16 +115,9 @@ export default function PPTPage() {
     <div className="min-h-screen bg-gray-100 flex flex-col">
 
       {/* 🔥 HEADER */}
-      <div className="bg-white shadow px-6 py-4 flex justify-between items-center">
-        <h1 className="text-xl font-bold">📊 PPT Generator</h1>
+      <Header />
 
-        <button
-          onClick={() => (window.location.href = "/login")}
-          className="bg-red-500 text-white px-4 py-2 rounded hover:bg-red-600"
-        >
-          Logout
-        </button>
-      </div>
+    
 
       {/* 🔥 MAIN */}
       <div className="flex flex-col items-center p-6 gap-6">

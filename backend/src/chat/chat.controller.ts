@@ -23,19 +23,37 @@ export class ChatController {
   async getUserChats(@Req() req: Request & { user: any }) {
     const userId = req.user?.id;
 
-    const chats = await this.chatService.getUserChats(userId);
+    if (!userId) {
+      throw new BadRequestException("Invalid user");
+    }
 
-    // ✅ FORMAT FOR FRONTEND
-    const formatted = chats.map((chat) => ({
-      id: chat.id,
-      document: chat.document,
-      versionId: chat.versionId, // 🔥 IMPORTANT
-      createdAt: chat.createdAt,
-    }));
+    const chats = await this.chatService.getUserChats(userId);
 
     return {
       success: true,
-      chats: formatted,
+      chats,
+    };
+  }
+
+  //////////////////////////////////////////////////////
+  // 🔍 QUESTIONS (PUT FIRST 🔥)
+  //////////////////////////////////////////////////////
+  @Get("questions/:id")
+  async getQuestions(
+    @Param("id") id: string,
+    @Req() req: Request & { user: any }
+  ) {
+    const chatId = Number(id);
+    const userId = req.user?.id;
+
+    if (!chatId) throw new BadRequestException("Invalid chatId");
+    if (!userId) throw new BadRequestException("Invalid user");
+
+    const questions = await this.chatService.getQuestions(chatId, userId);
+
+    return {
+      success: true,
+      questions,
     };
   }
 
@@ -51,13 +69,15 @@ export class ChatController {
     const userId = req.user?.id;
 
     if (!chatId) throw new BadRequestException("Invalid chatId");
+    if (!userId) throw new BadRequestException("Invalid user");
 
     const result = await this.chatService.getMessages(chatId, userId);
 
     return {
       success: true,
       messages: result.messages,
-      versionId: result.versionId, // 🔥 CRITICAL
+      versionId: result.versionId,
+      documentId: result.documentId || null,
     };
   }
 
@@ -72,30 +92,14 @@ export class ChatController {
     const chatId = Number(id);
     const userId = req.user?.id;
 
+    if (!chatId) throw new BadRequestException("Invalid chatId");
+    if (!userId) throw new BadRequestException("Invalid user");
+
     await this.chatService.deleteChat(chatId, userId);
 
     return {
       success: true,
       message: "Chat deleted",
-    };
-  }
-
-  //////////////////////////////////////////////////////
-  // 🔍 QUESTIONS
-  //////////////////////////////////////////////////////
-  @Get("questions/:id")
-  async getQuestions(
-    @Param("id") id: string,
-    @Req() req: Request & { user: any }
-  ) {
-    const chatId = Number(id);
-    const userId = req.user?.id;
-
-    const questions = await this.chatService.getQuestions(chatId, userId);
-
-    return {
-      success: true,
-      questions,
     };
   }
 }

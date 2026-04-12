@@ -17,9 +17,9 @@ export const askQuestion = (data: {
   question: string;
   versionId: number;
   chatSessionId: number; // 🔥 FIXED NAME
+  course?: string; // 🔥 OPTIONAL COURSE
 }) =>
   api.post("/rag/ask", data);
-
 //////////////////////////////////////////////////////
 // 📄 DOCUMENT
 //////////////////////////////////////////////////////

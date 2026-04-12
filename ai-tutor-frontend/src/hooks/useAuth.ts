@@ -5,6 +5,7 @@ import { api } from "@/services/api";
 import { logoutUser } from "@/services/tutor.service";
 import toast from "react-hot-toast";
 import { useEffect, useState, useRef } from "react";
+import axios from "axios";
 
 export default function useAuth() {
   const router = useRouter();
@@ -19,10 +20,13 @@ export default function useAuth() {
   ////////////////////////////////////////////
   const checkAuth = async () => {
     try {
-      await api.get("/auth/me");
+      await axios.get("/auth/me",
+      {
+        withCredentials: true,
+      });
 
       setIsLoggedIn(true);
-      return true;
+     
     } catch {
       setIsLoggedIn(false);
       return false;

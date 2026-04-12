@@ -9,7 +9,10 @@ interface Chat {
   document?: {
     name: string;
   };
-  versionId: number;
+  messages?: {
+    content: string;
+  }[];
+  versionId?: number | null;
   createdAt: string;
 }
 
@@ -33,9 +36,9 @@ export default function Sidebar({
   const router = useRouter();
   const pathname = usePathname();
 
-  ////////////////////////////////////////////
+  //////////////////////////////////////////////////////
   // 🚪 LOGOUT
-  ////////////////////////////////////////////
+  //////////////////////////////////////////////////////
   const handleLogout = async () => {
     try {
       await logoutUser();
@@ -47,11 +50,11 @@ export default function Sidebar({
     }
   };
 
-  ////////////////////////////////////////////
+  //////////////////////////////////////////////////////
   // 📂 OPEN CHAT
-  ////////////////////////////////////////////
+  //////////////////////////////////////////////////////
   const handleClick = async (chat: Chat) => {
-    if (!chat.id || !chat.versionId) {
+    if (!chat.id) {
       toast.error("⚠️ Chat not ready");
       return;
     }
@@ -60,7 +63,7 @@ export default function Sidebar({
 
     try {
       setActiveChat(chat.id);
-      setVersionId(chat.versionId);
+      setVersionId(chat.versionId || null);
 
       await openChat(chat.id);
     } catch {
@@ -68,9 +71,9 @@ export default function Sidebar({
     }
   };
 
-  ////////////////////////////////////////////
+  //////////////////////////////////////////////////////
   // ➕ NEW CHAT
-  ////////////////////////////////////////////
+  //////////////////////////////////////////////////////
   const handleNewChat = () => {
     setActiveChat(null);
     setVersionId(null);
@@ -79,9 +82,24 @@ export default function Sidebar({
     toast("Start a new chat ✨");
   };
 
-  ////////////////////////////////////////////
+  //////////////////////////////////////////////////////
+  // 🧠 TITLE LOGIC (🔥 IMPORTANT)
+  //////////////////////////////////////////////////////
+  const getChatTitle = (chat: Chat) => {
+    if (chat.document?.name) {
+      return `📄 ${chat.document.name}`;
+    }
+
+    if (chat.messages?.[0]?.content) {
+      return `📘 ${chat.messages[0].content.slice(0, 30)}`;
+    }
+
+    return "🆕 New Chat";
+  };
+
+  //////////////////////////////////////////////////////
   // 🎨 UI
-  ////////////////////////////////////////////
+  //////////////////////////////////////////////////////
   return (
     <div className="w-72 bg-gray-900 text-white flex flex-col h-screen">
 
@@ -143,14 +161,17 @@ export default function Sidebar({
                     : "bg-gray-800 hover:bg-gray-700"
                 }`}
               >
+                {/* 🔥 TITLE */}
                 <p className="text-sm font-semibold truncate">
-                  {chat.document?.name || "Untitled"}
+                  {getChatTitle(chat)}
                 </p>
 
+                {/* DATE */}
                 <p className="text-xs text-gray-400">
                   {new Date(chat.createdAt).toLocaleString()}
                 </p>
 
+                {/* ACTIVE */}
                 {isActive && (
                   <span className="text-[10px] text-green-300">
                     ● Active

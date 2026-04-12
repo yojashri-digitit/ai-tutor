@@ -8,38 +8,46 @@ import {
   getUserChats,
   getChatMessages,
   deleteChat,
-  getQuestions,
 } from "@/services/tutor.service";
 import axios from "axios";
 import toast from "react-hot-toast";
-
+import Header  from "@/components/Header";
+import { Trash2 } from "lucide-react";
 export default function NotesPage() {
   const [question, setQuestion] = useState("");
+  const [course, setCourse] = useState("");
+  const [customCourse, setCustomCourse] = useState("");
+
   const fileRef = useRef<HTMLInputElement>(null);
 
   const [messages, setMessages] = useState<any[]>([]);
+  const [questions, setQuestions] = useState<any[]>([]);
+  const [chatFiles, setChatFiles] = useState<string[]>([]);
+
   const [loading, setLoading] = useState(false);
+  const [uploading, setUploading] = useState(false);
 
   const [chats, setChats] = useState<any[]>([]);
   const [activeChat, setActiveChat] = useState<number | null>(null);
-  const [questions, setQuestions] = useState<any[]>([]);
+
   const [versionId, setVersionId] = useState<number | null>(null);
-const [currentDocName, setCurrentDocName] = useState<string | null>(null);
+
   const bottomRef = useRef<any>(null);
 
   //////////////////////////////////////////////////////
-  // 🔐 AUTH
+  // AUTH
   //////////////////////////////////////////////////////
   useEffect(() => {
-    axios.get("http://localhost:5000/auth/me", { withCredentials: true })
-      .catch(() => {
-        toast.error("Login required");
-        window.location.href = "/login";
-      });
+    axios.defaults.withCredentials = true;
+
+    axios.get("http://localhost:5000/auth/me").catch(() => {
+      toast.error("Login required");
+      window.location.href = "/login";
+    });
   }, []);
 
   //////////////////////////////////////////////////////
-  // 🚀 LOAD CHATS
+  // LOAD CHATS
   //////////////////////////////////////////////////////
   useEffect(() => {
     loadChats();
@@ -55,141 +63,160 @@ const [currentDocName, setCurrentDocName] = useState<string | null>(null);
   };
 
   //////////////////////////////////////////////////////
-  // 🔽 AUTO SCROLL
+  // LOGOUT 🔥
   //////////////////////////////////////////////////////
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+  const logout = async () => {
+    try {
+      await axios.post("http://localhost:5000/auth/logout");
+      toast.success("Logged out 👋");
+      window.location.href = "/login";
+    } catch {
+      toast.error("Logout failed");
+    }
+  };
 
   //////////////////////////////////////////////////////
-  // 📂 OPEN CHAT
+  // OPEN CHAT
   //////////////////////////////////////////////////////
   const openChat = async (chatId: number) => {
-  setActiveChat(chatId);
+    if (!chatId || isNaN(chatId)) return;
 
-  try {
-    const res = await getChatMessages(chatId);
-
-    setMessages(res.messages || []);
-    setVersionId(res.versionId || null);
-
-    const qRes = await getQuestions(chatId);
-    setQuestions(qRes.questions || []);
-
-    // ✅ SET FILE NAME
-    const selected = chats.find((c) => c.id === chatId);
-    setCurrentDocName(selected?.document?.name || "Document");
-
-  } catch {
-    toast.error("Failed to load chat");
-  }
-};
-
-  //////////////////////////////////////////////////////
-  // ❌ DELETE CHAT
-  //////////////////////////////////////////////////////
-  const removeChat = async (chatId: number) => {
     try {
-      await deleteChat(chatId);
-      toast.success("Deleted");
+      setActiveChat(chatId);
 
-      if (activeChat === chatId) {
-        setMessages([]);
-        setActiveChat(null);
-        setVersionId(null);
-        setQuestions([]);
+      const res = await getChatMessages(chatId);
+
+      setMessages(res.messages || []);
+      setVersionId(res.versionId || null);
+
+      const selected = chats.find((c) => c.id === chatId);
+
+      if (selected?.document?.name) {
+        setChatFiles((prev) =>
+          prev.includes(selected.document.name)
+            ? prev
+            : [...prev, selected.document.name]
+        );
+      } else {
+        setChatFiles([]);
       }
 
+      const qRes = await axios.get(
+        `http://localhost:5000/chat/questions/${chatId}`
+      );
+
+      setQuestions(qRes.data.questions || []);
+    } catch {
+      toast.error("Failed to open chat");
+    }
+  };
+
+  //////////////////////////////////////////////////////
+  // DELETE CHAT (CONFIRM 🔥)
+  //////////////////////////////////////////////////////
+  const removeChat = async (chatId: number) => {
+    const confirmDelete = window.confirm(
+      "⚠️ Are you sure you want to delete this chat?\nThis cannot be undone."
+    );
+
+    if (!confirmDelete) return;
+
+    try {
+      await deleteChat(chatId);
+
+      if (activeChat === chatId) newChat();
+
       loadChats();
+      toast.success("Chat deleted 🗑️");
     } catch {
       toast.error("Delete failed");
     }
   };
 
   //////////////////////////////////////////////////////
-  // ➕ NEW CHAT
+  // NEW CHAT
   //////////////////////////////////////////////////////
   const newChat = () => {
     setActiveChat(null);
-    setVersionId(null);
     setMessages([]);
+    setVersionId(null);
     setQuestions([]);
-    setCurrentDocName(null);
+    setChatFiles([]);
   };
 
   //////////////////////////////////////////////////////
-  // 🚀 UPLOAD
+  // UPLOAD
   //////////////////////////////////////////////////////
   const upload = async () => {
-    const file = fileRef.current?.files?.[0];
+    const files = fileRef.current?.files;
 
-    if (!file) {
-      toast.error("Select file");
-      return;
+    if (!files || files.length === 0) {
+      return toast.error("Select file(s)");
     }
 
-    const formData = new FormData();
-    formData.append("file", file);
+    setUploading(true);
+    toast.loading("Uploading...");
 
     try {
-      setLoading(true);
-      toast.loading("Uploading...", { id: "upload" });
+      for (let file of Array.from(files)) {
+        const formData = new FormData();
+        formData.append("file", file);
 
-      const res = await uploadDocument(formData, false);
+        const res = await uploadDocument(formData);
 
-      // 🔁 EXISTS
-      if (res.data.reused) {
-        toast.dismiss("upload");
-
-        const confirmReplace = window.confirm(
-          `File exists\nUploaded: ${new Date(res.data.uploadedAt).toLocaleString()}\nReplace?`
+        const existsInSidebar = chats.some(
+          (c) => c.document?.name === file.name
         );
 
-        if (confirmReplace) {
-          toast.loading("Replacing...", { id: "replace" });
+        if (res.data.reused && existsInSidebar) {
+          const confirmReplace = window.confirm(
+            `${file.name} already exists.\n\nOK = Replace\nCancel = Open old`
+          );
 
-          const replaceRes = await uploadDocument(formData, true);
-
-          toast.success("Replaced ✅", { id: "replace" });
-
-          await openChat(replaceRes.data.chatSessionId);
+          if (confirmReplace) {
+            const replaceRes = await uploadDocument(formData, true);
+            await openChat(replaceRes.data.chatSessionId);
+          } else {
+            await openChat(res.data.chatSessionId);
+          }
         } else {
-          toast("Opening existing");
-
           await openChat(res.data.chatSessionId);
         }
 
-        loadChats();
-        return;
+        setChatFiles((prev) =>
+          prev.includes(file.name) ? prev : [...prev, file.name]
+        );
       }
 
-      // ✅ NEW
-      toast.success("Uploaded ✅", { id: "upload" });
-
-      await openChat(res.data.chatSessionId);
+      toast.dismiss();
+      toast.success("Upload complete 🚀");
       loadChats();
-
-      if (fileRef.current) fileRef.current.value = "";
-
     } catch {
+      toast.dismiss();
       toast.error("Upload failed");
     } finally {
-      setLoading(false);
+      setUploading(false);
+      if (fileRef.current) fileRef.current.value = "";
     }
   };
 
   //////////////////////////////////////////////////////
-  // 💬 ASK
+  // ASK
   //////////////////////////////////////////////////////
   const ask = async () => {
-    if (!activeChat || !versionId) {
-      toast.error("Upload/select doc first");
-      return;
+    const finalCourse = course === "Other" ? customCourse : course;
+
+    if (!finalCourse && !versionId) {
+      return toast.error("Select course first");
     }
 
-    if (!question.trim()) {
-      toast.error("Enter question");
-      return;
+    if (!question.trim() || question.length < 3) {
+      return toast.error("Enter valid topic");
+    }
+
+    const invalidWords = ["abc", "xyz", "asdf", "mmmm"];
+    if (invalidWords.includes(question.toLowerCase())) {
+      return toast.error("Invalid topic");
     }
 
     const tempId = Date.now();
@@ -204,8 +231,9 @@ const [currentDocName, setCurrentDocName] = useState<string | null>(null);
     try {
       const res = await askQuestion({
         question,
-        versionId,
-        chatSessionId: activeChat, // ✅ CORRECT
+        versionId: versionId || undefined,
+        chatSessionId: activeChat || undefined,
+        course: finalCourse,
       });
 
       setMessages((prev) => [
@@ -218,10 +246,7 @@ const [currentDocName, setCurrentDocName] = useState<string | null>(null);
       ]);
 
       setQuestion("");
-
-      const qRes = await getQuestions(activeChat);
-      setQuestions(qRes.questions || []);
-
+      loadChats();
     } catch {
       toast.error("Failed");
     } finally {
@@ -230,151 +255,162 @@ const [currentDocName, setCurrentDocName] = useState<string | null>(null);
   };
 
   //////////////////////////////////////////////////////
-  // 🎨 UI
+  // AUTO SCROLL
+  //////////////////////////////////////////////////////
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
+
+  //////////////////////////////////////////////////////
+  // UI
   //////////////////////////////////////////////////////
   return (
-    <div className="h-screen flex bg-gray-100">
+    
+<div className="h-screen flex flex-col overflow-hidden">
+      {/* 🔥 HEADER */}
+     <Header/>
 
-      {/* SIDEBAR */}
-      <div className="w-72 bg-gray-900 text-white flex flex-col">
+      <div className="flex flex-1 overflow-hidden">
 
-        <div className="p-4 font-bold border-b">📚 Chats</div>
+        {/* SIDEBAR */}
+        <div className="w-72 bg-gray-900 text-white flex flex-col">
+          <div className="p-4 font-bold border-b">📚 Chats</div>
 
-        <button
-          onClick={newChat}
-          className="m-3 bg-blue-600 py-2 rounded"
-        >
-          + New Chat
-        </button>
+          <button onClick={newChat} className="m-3 bg-blue-600 py-2 rounded">
+            + New Chat
+          </button>
 
-        <div className="flex-1 overflow-y-auto p-3 space-y-2">
-          {chats.map((chat) => (
-            <div
-              key={chat.id}
-              onClick={() => openChat(chat.id)}
-              className={`p-3 rounded cursor-pointer ${
-                activeChat === chat.id
-                  ? "bg-blue-600"
-                  : "bg-gray-800"
-              }`}
-            >
-              <div className="flex justify-between">
-                <div>
-                  <p>{chat.document?.name}</p>
-                  <p className="text-xs text-gray-400">
-                    {new Date(chat.createdAt).toLocaleString()}
-                  </p>
-                </div>
+          <div className="flex-1 overflow-y-auto p-3 space-y-2">
+            {chats.map((chat) => (
+              <div
+                key={chat.id}
+                onClick={() => openChat(chat.id)}
+                className={`p-3 rounded cursor-pointer ${
+                  activeChat === chat.id ? "bg-blue-600" : "bg-gray-800"
+                }`}
+              >
+                <div className="flex justify-between">
+                  <div>
+                    <p>{chat.title || "New Chat"}</p>
+                    <p className="text-xs text-gray-400">
+                      {new Date(chat.createdAt).toLocaleString()}
+                    </p>
+                  </div>
 
                 <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    removeChat(chat.id);
-                  }}
-                >
-                  ❌
-                </button>
+  onClick={(e) => {
+    e.stopPropagation();
+    removeChat(chat.id);
+  }}
+  className="p-1 rounded hover:bg-red-100 transition"
+>
+  <Trash2 size={18} className="text-red-500 hover:text-red-700" />
+</button>
+                </div>
               </div>
+            ))}
+          </div>
+        </div>
+
+        {/* MAIN */}
+        <div className="flex-1 flex flex-col">
+
+          {/* HEADER */}
+          <div className="flex items-center gap-3 p-3 bg-gray-100">
+            <button
+              onClick={() =>
+                activeChat ? newChat() : window.history.back()
+              }
+              className="px-3 py-1 bg-gray-300 rounded"
+            >
+              ⬅ Back
+            </button>
+
+
+            <div className="text-sm text-gray-600">
+              {versionId ? "📄 Document Mode" : "📘 Course Mode"}
             </div>
-          ))}
+            {/* QUESTIONS DROPDOWN */}
+<select
+  onChange={(e) => {
+    const el = document.getElementById(e.target.value);
+    el?.scrollIntoView({ behavior: "smooth" });
+  }}
+  className="ml-auto border p-2 rounded"
+>
+  <option>
+    {questions.length === 0
+      ? "No questions yet"
+      : "Jump to question"}
+  </option>
+
+  {questions.map((q) => (
+    <option key={q.id} value={`msg-${q.id}`}>
+      {q.content.slice(0, 40)}
+    </option>
+  ))}
+</select>
+          </div>
+
+          {/* FILES */}
+          {chatFiles.length > 0 && (
+            <div className="p-2 bg-yellow-100 flex gap-2 flex-wrap">
+              {chatFiles.map((file, i) => (
+                <span key={i} className="bg-yellow-300 px-2 py-1 rounded">
+                  📄 {file}
+                </span>
+              ))}
+            </div>
+          )}
+
+          {/* CHAT */}
+          <div className="flex-1 overflow-y-auto p-6 space-y-4">
+            {messages.map((msg) => (
+              <div
+                key={msg.id}
+                className={`flex ${
+                  msg.role === "user" ? "justify-end" : "justify-start"
+                }`}
+              >
+                <div className="bg-white p-3 rounded shadow max-w-xl">
+                  <ReactMarkdown>{msg.content}</ReactMarkdown>
+                </div>
+              </div>
+            ))}
+
+            {loading && <p>🤖 Generating...</p>}
+            <div ref={bottomRef}></div>
+          </div>
+
+          {/* INPUT */}
+          <div className="p-4 bg-white border-t flex gap-2 items-center">
+            <input type="file" ref={fileRef} multiple />
+
+            <button
+              onClick={upload}
+              disabled={uploading}
+              className="bg-green-600 text-white px-3 py-2 rounded"
+            >
+              {uploading ? "Uploading..." : "Upload"}
+            </button>
+
+            <input
+              value={question}
+              onChange={(e) => setQuestion(e.target.value)}
+              className="flex-1 border p-2 rounded"
+              placeholder="Ask topic..."
+            />
+
+            <button
+              onClick={ask}
+              disabled={loading}
+              className="bg-blue-600 text-white px-4"
+            >
+              Ask
+            </button>
+          </div>
         </div>
       </div>
-
-      {/* MAIN */}
-     {/* MAIN */}
-<div className="flex-1 flex flex-col">
-
-  {/* ========================= */}
-  {/* 🆕 NEW CHAT SCREEN */}
-  {/* ========================= */}
-  {!activeChat && (
-    <div className="flex-1 flex flex-col items-center justify-center gap-6">
-
-      <h2 className="text-2xl font-semibold text-gray-600">
-        Start a new chat
-      </h2>
-
-      <div className="flex gap-2 w-[60%]">
-        <input
-          type="file"
-          ref={fileRef}
-          className="border p-2 rounded w-1/2"
-        />
-
-        <button
-          onClick={upload}
-          className="bg-green-600 text-white px-4 rounded"
-        >
-          Upload
-        </button>
-      </div>
-
-      <input
-        value={question}
-        onChange={(e) => setQuestion(e.target.value)}
-        placeholder="Ask something..."
-        className="border p-3 rounded w-[60%]"
-      />
-
-      <button
-        onClick={ask}
-        className="bg-blue-600 text-white px-6 py-2 rounded"
-      >
-        Ask
-      </button>
-    </div>
-  )}
-
-  {/* ========================= */}
-  {/* 💬 EXISTING CHAT */}
-  {/* ========================= */}
-  {activeChat && (
-    <>
-      {/* 🔥 FILE NAME HEADER */}
-      <div className="p-3 bg-gray-200 text-sm text-gray-700">
-        📄 {currentDocName}
-      </div>
-
-      {/* CHAT */}
-      <div className="flex-1 overflow-y-auto p-6 space-y-4">
-        {messages.map((msg) => (
-          <div
-            key={msg.id}
-            className={`flex ${
-              msg.role === "user"
-                ? "justify-end"
-                : "justify-start"
-            }`}
-          >
-            <div className="bg-white p-3 rounded shadow max-w-xl">
-              <ReactMarkdown>{msg.content}</ReactMarkdown>
-            </div>
-          </div>
-        ))}
-
-        {loading && <p>🤖 Thinking...</p>}
-        <div ref={bottomRef}></div>
-      </div>
-
-      {/* INPUT ONLY (NO UPLOAD 🚫) */}
-      <div className="p-4 flex gap-2 bg-white border-t">
-        <input
-          value={question}
-          onChange={(e) => setQuestion(e.target.value)}
-          className="flex-1 border p-2 rounded"
-          placeholder="Ask something..."
-        />
-
-        <button
-          onClick={ask}
-          className="bg-blue-600 text-white px-4 rounded"
-        >
-          Ask
-        </button>
-      </div>
-    </>
-  )}
-</div>
     </div>
   );
 }

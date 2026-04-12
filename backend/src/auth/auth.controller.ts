@@ -74,10 +74,10 @@ async refresh(@Req() req, @Res({ passthrough: true }) res) {
     await this.authService.refreshToken(refreshToken);
 
   res.cookie("accessToken", accessToken, {
-    httpOnly: true,
-    sameSite: "lax",
-    secure: false,
-  });
+  httpOnly: true,
+  sameSite: "lax",
+  secure: process.env.NODE_ENV === "production",
+});
 
   return { message: "Token refreshed" };
 }
